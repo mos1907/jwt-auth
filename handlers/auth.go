@@ -47,40 +47,54 @@ func Login(c *fiber.Ctx) error {
 	if user.ID == 0 {
 		c.Status(fiber.StatusNotFound)
 		return c.JSON(fiber.Map{
-			"message": "Kullanıcı bulunamadı",
+			"message": "Usern Not Found",
 		})
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data["password"])); err != nil {
 		c.Status(fiber.StatusBadRequest)
 		return c.JSON(fiber.Map{
-			"message": "Yanlış şifre",
+			"message": "wrong password",
 		})
 	}
 
 	claims := jwt.MapClaims{
 		"user_id": user.ID,
-		"exp":     time.Now().Add(time.Hour * 24).Unix(),
+		"exp":     time.Now().Add(time.Hour * 24).Unix(), // 1 gün geçerlilik süresi
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	// Create access token
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	config := config.LoadConfig()
-	t, err := token.SignedString([]byte(config.JWTSecret))
-
+	accessTokenString, err := accessToken.SignedString([]byte(config.JWTSecret))
 	if err != nil {
 		return c.SendStatus(fiber.StatusInternalServerError)
 	}
 
+	// Create refresh token
+	refreshClaims := jwt.MapClaims{
+		"user_id": user.ID,
+		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(), // 1 hafta geçerlilik süresi
+	}
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
+	refreshTokenString, err := refreshToken.SignedString([]byte(config.JWTSecret))
+	if err != nil {
+		return c.SendStatus(fiber.StatusInternalServerError)
+	}
+
+	// Store tokens in Redis
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     config.RedisAddr,
 		Password: config.RedisPassword,
 		DB:       config.RedisDB,
 	})
 
-	rdb.Set(ctx, strconv.Itoa(int(user.ID)), t, time.Hour*24)
+	rdb.Set(ctx, strconv.Itoa(int(user.ID)), accessTokenString, time.Hour*24)
+	rdb.Set(ctx, "refresh_"+strconv.Itoa(int(user.ID)), refreshTokenString, time.Hour*24*7)
 
 	return c.JSON(fiber.Map{
-		"token": t,
+		"access_token":  accessTokenString,
+		"refresh_token": refreshTokenString,
 	})
 }
 
@@ -99,36 +113,51 @@ func Logout(c *fiber.Ctx) error {
 	})
 
 	rdb.Del(ctx, strconv.Itoa(int(user.ID)))
+	rdb.Del(ctx, "refresh_"+strconv.Itoa(int(user.ID)))
 
 	return c.JSON(fiber.Map{
-		"message": "Başarılı",
+		"message": "Successful",
 	})
 }
 
 func Refresh(c *fiber.Ctx) error {
 	user := c.Locals("user").(models.User)
+
+	// Generate new access token
 	claims := jwt.MapClaims{
 		"user_id": user.ID,
-		"exp":     time.Now().Add(time.Hour * 24).Unix(),
+		"exp":     time.Now().Add(time.Hour * 24).Unix(), // 1 gün geçerlilik süresi
 	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	config := config.LoadConfig()
-	t, err := token.SignedString([]byte(config.JWTSecret))
-
+	accessTokenString, err := accessToken.SignedString([]byte(config.JWTSecret))
 	if err != nil {
 		return c.SendStatus(fiber.StatusInternalServerError)
 	}
 
+	// Generate new refresh token
+	refreshClaims := jwt.MapClaims{
+		"user_id": user.ID,
+		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(), // 1 hafta geçerlilik süresi
+	}
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
+	refreshTokenString, err := refreshToken.SignedString([]byte(config.JWTSecret))
+	if err != nil {
+		return c.SendStatus(fiber.StatusInternalServerError)
+	}
+
+	// Store new tokens in Redis
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     config.RedisAddr,
 		Password: config.RedisPassword,
 		DB:       config.RedisDB,
 	})
 
-	rdb.Set(ctx, strconv.Itoa(int(user.ID)), t, time.Hour*24)
+	rdb.Set(ctx, strconv.Itoa(int(user.ID)), accessTokenString, time.Hour*24)
+	rdb.Set(ctx, "refresh_"+strconv.Itoa(int(user.ID)), refreshTokenString, time.Hour*24*7)
 
 	return c.JSON(fiber.Map{
-		"token": t,
+		"access_token":  accessTokenString,
+		"refresh_token": refreshTokenString,
 	})
 }

@@ -25,5 +25,5 @@ func main() {
 	app.Post("/logout", handlers.Logout)
 	app.Post("/refresh", handlers.Refresh)
 
-	app.Listen(":3000")
+	app.Listen(":6000")
 }

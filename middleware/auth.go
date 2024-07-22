@@ -6,16 +6,18 @@ import (
 	"jwt-auth/config"
 	"jwt-auth/database"
 	"jwt-auth/models"
+	"strings"
 )
 
 func Auth(c *fiber.Ctx) error {
 	config := config.LoadConfig()
-	tokenString := c.Get("Authorization")
-
-	if tokenString == "" {
-		return c.SendStatus(fiber.StatusUnauthorized)
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "No authorization header"})
 	}
 
+	// Token'ı "Bearer " kısmını kaldırarak ayıklayın
+	tokenString := strings.Replace(authHeader, "Bearer ", "", 1)
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fiber.ErrUnauthorized
@@ -24,21 +26,26 @@ func Auth(c *fiber.Ctx) error {
 	})
 
 	if err != nil {
-		return c.SendStatus(fiber.StatusUnauthorized)
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid token"})
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if ok && token.Valid {
+		userID, ok := claims["user_id"].(float64)
+		if !ok {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid token claims"})
+		}
+
 		var user models.User
-		database.DB.First(&user, claims["user_id"])
+		database.DB.First(&user, uint(userID))
 
 		if user.ID == 0 {
-			return c.SendStatus(fiber.StatusUnauthorized)
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "User not found"})
 		}
 
 		c.Locals("user", user)
 		return c.Next()
 	} else {
-		return c.SendStatus(fiber.StatusUnauthorized)
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid token"})
 	}
 }
